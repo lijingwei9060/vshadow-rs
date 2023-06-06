@@ -1,0 +1,33 @@
+[package]
+name = "vshadow-rs"
+version = "0.1.0"
+edition = "2021"
+build = "build.rs"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+tracing = { version = "0.1" }
+chrono = "0.4"
+windows-targets = { version = "0.48" }
+
+[dependencies.windows]
+version = "0.48"
+features = [
+    "Data_Xml_Dom",
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_Ioctl",
+    "Win32_System_IO",
+    "Win32_Storage_FileSystem",
+    "Win32_Storage_Vss",
+    "Win32_System_Com",
+    "Win32_System_UpdateAgent",
+    "Win32_System_Time"
+]
+
+[build-dependencies]
+# winres project
+winres = { version = "0.1" }
