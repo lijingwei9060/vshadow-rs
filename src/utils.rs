@@ -1,19 +1,30 @@
 use chrono::{DateTime, Local, Utc};
-use std::time::{Duration, SystemTime};
-use windows::Win32::Storage::Vss::{
-    VSS_SNAPSHOT_STATE, VSS_SS_ABORTED, VSS_SS_COMMITTED, VSS_SS_COUNT, VSS_SS_CREATED,
-    VSS_SS_DELETED, VSS_SS_POSTCOMMITTED, VSS_SS_PRECOMMITTED, VSS_SS_PREFINALCOMMITTED,
-    VSS_SS_PREPARED, VSS_SS_PREPARING, VSS_SS_PROCESSING_COMMIT, VSS_SS_PROCESSING_POSTCOMMIT,
-    VSS_SS_PROCESSING_POSTFINALCOMMIT, VSS_SS_PROCESSING_PRECOMMIT,
-    VSS_SS_PROCESSING_PREFINALCOMMIT, VSS_SS_PROCESSING_PREPARE, VSS_VOLSNAP_ATTR_AUTORECOVER,
-    VSS_VOLSNAP_ATTR_CLIENT_ACCESSIBLE, VSS_VOLSNAP_ATTR_DELAYED_POSTSNAPSHOT,
-    VSS_VOLSNAP_ATTR_DIFFERENTIAL, VSS_VOLSNAP_ATTR_EXPOSED_LOCALLY,
-    VSS_VOLSNAP_ATTR_EXPOSED_REMOTELY, VSS_VOLSNAP_ATTR_FILE_SHARE,
-    VSS_VOLSNAP_ATTR_HARDWARE_ASSISTED, VSS_VOLSNAP_ATTR_IMPORTED, VSS_VOLSNAP_ATTR_NOT_SURFACED,
-    VSS_VOLSNAP_ATTR_NOT_TRANSACTED, VSS_VOLSNAP_ATTR_NO_AUTORECOVERY,
-    VSS_VOLSNAP_ATTR_NO_AUTO_RELEASE, VSS_VOLSNAP_ATTR_NO_WRITERS, VSS_VOLSNAP_ATTR_PERSISTENT,
-    VSS_VOLSNAP_ATTR_PLEX, VSS_VOLSNAP_ATTR_ROLLBACK_RECOVERY, VSS_VOLSNAP_ATTR_TRANSPORTABLE,
-    VSS_VOLSNAP_ATTR_TXF_RECOVERY,
+use std::{
+    iter::once,
+    time::{Duration, SystemTime},
+};
+use windows::{
+    core::PCWSTR,
+    Win32::Storage::{
+        FileSystem::{GetVolumeNameForVolumeMountPointW, GetVolumePathNameW},
+        Vss::{
+            VSS_SNAPSHOT_STATE, VSS_SS_ABORTED, VSS_SS_COMMITTED, VSS_SS_COUNT, VSS_SS_CREATED,
+            VSS_SS_DELETED, VSS_SS_POSTCOMMITTED, VSS_SS_PRECOMMITTED, VSS_SS_PREFINALCOMMITTED,
+            VSS_SS_PREPARED, VSS_SS_PREPARING, VSS_SS_PROCESSING_COMMIT,
+            VSS_SS_PROCESSING_POSTCOMMIT, VSS_SS_PROCESSING_POSTFINALCOMMIT,
+            VSS_SS_PROCESSING_PRECOMMIT, VSS_SS_PROCESSING_PREFINALCOMMIT,
+            VSS_SS_PROCESSING_PREPARE, VSS_VOLSNAP_ATTR_AUTORECOVER,
+            VSS_VOLSNAP_ATTR_CLIENT_ACCESSIBLE, VSS_VOLSNAP_ATTR_DELAYED_POSTSNAPSHOT,
+            VSS_VOLSNAP_ATTR_DIFFERENTIAL, VSS_VOLSNAP_ATTR_EXPOSED_LOCALLY,
+            VSS_VOLSNAP_ATTR_EXPOSED_REMOTELY, VSS_VOLSNAP_ATTR_FILE_SHARE,
+            VSS_VOLSNAP_ATTR_HARDWARE_ASSISTED, VSS_VOLSNAP_ATTR_IMPORTED,
+            VSS_VOLSNAP_ATTR_NOT_SURFACED, VSS_VOLSNAP_ATTR_NOT_TRANSACTED,
+            VSS_VOLSNAP_ATTR_NO_AUTORECOVERY, VSS_VOLSNAP_ATTR_NO_AUTO_RELEASE,
+            VSS_VOLSNAP_ATTR_NO_WRITERS, VSS_VOLSNAP_ATTR_PERSISTENT, VSS_VOLSNAP_ATTR_PLEX,
+            VSS_VOLSNAP_ATTR_ROLLBACK_RECOVERY, VSS_VOLSNAP_ATTR_TRANSPORTABLE,
+            VSS_VOLSNAP_ATTR_TXF_RECOVERY,
+        },
+    },
 };
 
 pub fn get_string_for_snapshot_state(v: VSS_SNAPSHOT_STATE) -> String {
@@ -144,4 +155,56 @@ pub(crate) fn volsnap_attrs_to_str(attr: i32) -> Vec<String> {
         attrs.push("File_Share".to_owned());
     }
     return attrs;
+}
+
+/// Get the unique volume name for the given path
+#[inline]
+pub fn get_unique_volume_name_for_path(path: &str) -> ::windows::core::Result<String> {
+    assert!(path.len() > 0);
+    //todo: Add the backslash termination, if needed
+    let mut volume_root_path = [0; 260];
+    let hr_res = unsafe {
+        let file_name: Vec<u16> = path.encode_utf16().chain(once(0)).collect();
+        GetVolumePathNameW(PCWSTR::from_raw(file_name.as_ptr()), &mut volume_root_path)
+    };
+    if !hr_res.as_bool() {
+        tracing::error!("failed to covert");
+        return hr_res.ok().map(|_| String::default());
+    }
+
+    tracing::debug!("- Path name: {}", u16_to_string(volume_root_path.as_ptr()));
+
+    let mut volume_name = [0; 260];
+    let hr_res = unsafe {
+        GetVolumeNameForVolumeMountPointW(
+            PCWSTR::from_raw(volume_root_path.as_ptr()),
+            &mut volume_name,
+        )
+    };
+    if !hr_res.as_bool() {
+        tracing::error!("failed to covert");
+        return hr_res.ok().map(|_| String::default());
+    }
+
+    tracing::debug!(
+        "- Volume name for path: {}",
+        u16_to_string(volume_name.as_ptr())
+    );
+
+    let mut volume_unique_name = [0; 260];
+    let hr_res = unsafe {
+        GetVolumeNameForVolumeMountPointW(
+            PCWSTR::from_raw(volume_name.as_ptr()),
+            &mut volume_unique_name,
+        )
+    };
+    if !hr_res.as_bool() {
+        tracing::error!("failed to covert");
+        return hr_res.ok().map(|_| String::default());
+    }
+    tracing::debug!(
+        "-  Unique volume name: {}",
+        u16_to_string(volume_unique_name.as_ptr())
+    );
+    Ok(u16_to_string(volume_unique_name.as_ptr()))
 }

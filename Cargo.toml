@@ -10,6 +10,7 @@ build = "build.rs"
 tracing = { version = "0.1" }
 chrono = "0.4"
 windows-targets = { version = "0.48" }
+clap = { version = "4.3.2", features = ["derive"] }
 
 [dependencies.windows]
 version = "0.48"

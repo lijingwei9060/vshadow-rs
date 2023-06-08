@@ -112,14 +112,24 @@ impl IVssBackupComponent {
     //     SnapshotSetId: ::windows::core::PCWSTR,
     // ) -> ::windows::core::HRESULT,
 
-    // pub DeleteSnapshots: unsafe extern "system" fn(
-    //     this: *mut ::core::ffi::c_void,
-    //     SourceObjectId: ::windows::core::GUID,
-    //     eSourceObjectType: VSS_OBJECT_TYPE,
-    //     bForceDelete: BOOL,
-    //     plDeletedSnapshots: *mut i32,
-    //     pNondeletedSnapshotID: *mut ::windows::core::GUID,
-    // ) -> ::windows::core::HRESULT,
+    pub unsafe fn DeleteSnapshots(
+        &self,
+        SourceObjectId: ::windows::core::GUID,
+        eSourceObjectType: VSS_OBJECT_TYPE,
+        bForceDelete: BOOL,
+        plDeletedSnapshots: *mut i32,
+        pNondeletedSnapshotID: *mut ::windows::core::GUID,
+    ) -> ::windows::core::Result<()> {
+        (::windows::core::Interface::vtable(self).DeleteSnapshots)(
+            ::windows::core::Interface::as_raw(self),
+            SourceObjectId,
+            eSourceObjectType,
+            bForceDelete,
+            plDeletedSnapshots,
+            pNondeletedSnapshotID,
+        )
+        .ok()
+    }
 
     // pub DisableWriterClasses: unsafe extern "system" fn(
     //     this: *mut ::core::ffi::c_void,
@@ -185,11 +195,11 @@ impl IVssBackupComponent {
 
     pub unsafe fn GatherWriterMetadata(
         &self,
-        pAsync: *mut *mut ::core::ffi::c_void,
+        mut pAsync: *mut IVssAsync,
     ) -> ::windows::core::Result<()> {
         (::windows::core::Interface::vtable(self).GatherWriterMetadata)(
             ::windows::core::Interface::as_raw(self),
-            pAsync,
+            ::core::mem::transmute(&mut pAsync),
         )
         .ok()
     }
@@ -197,12 +207,6 @@ impl IVssBackupComponent {
     // pub GatherWriterStatus: unsafe extern "system" fn(
     //     this: *mut ::core::ffi::c_void,
     //     ppAsync: *mut *mut IVssAsync,
-    // ) -> ::windows::core::HRESULT,
-
-    // pub GetSnapshotProperties: unsafe extern "system" fn(
-    //     this: *mut ::core::ffi::c_void,
-    //     SnapshotId: ::windows::core::GUID,
-    //     pProp: *mut VSS_SNAPSHOT_PROP,
     // ) -> ::windows::core::HRESULT,
 
     // pub GetWriterComponentsCount: unsafe extern "system" fn(
@@ -311,6 +315,17 @@ impl IVssBackupComponent {
             eReturnedObjectsType,
             ppEnum,
         )
+    }
+
+    pub unsafe fn GetWriterMetadataCount(
+        &self,
+        pcWriters: &mut u32,
+    ) -> ::windows::core::Result<()> {
+        (::windows::core::Interface::vtable(self).GetWriterMetadataCount)(
+            ::windows::core::Interface::as_raw(self),
+            pcWriters,
+        )
+        .ok()
     }
 }
 
@@ -735,14 +750,12 @@ mod test {
                 ))
                 .unwrap();
 
-            let mut pAsync = ::windows::core::zeroed::<IVssAsync>();
+            let mut pAsync = IVssAsync::from_abi(::windows::core::zeroed::<IVssAsync>()).unwrap();
             vssBackup.GatherWriterMetadata(&mut pAsync).unwrap();
-
-            let pAynsc = IVssAsync::from_abi(pAsync).unwrap();
 
             println!("Gathering metadata from writers...");
 
-            pAynsc.Wait(u32::MAX).unwrap();
+            pAsync.Wait(u32::MAX).unwrap();
 
             println!("calling StartSnapshotSet...");
             let mut id = ::windows::core::GUID::zeroed();

@@ -1,12 +1,14 @@
-use std::{iter::once, ptr::null_mut};
+use chrono::{DateTime, Local};
+use std::{iter::once, ptr::null_mut, time::SystemTime};
 use tracing::debug;
 use windows::{
-    core::{Interface, BSTR, GUID, HRESULT},
+    core::{Interface, Type, BSTR, GUID, HRESULT},
     Win32::{
-        Foundation::S_FALSE,
+        Foundation::{FALSE, S_FALSE},
         Storage::Vss::{
-            IVssAsync, IVssEnumObject, VSS_BT_FULL, VSS_CTX_BACKUP, VSS_OBJECT_NONE,
-            VSS_OBJECT_PROP, VSS_OBJECT_SNAPSHOT, VSS_SNAPSHOT_CONTEXT, VSS_SNAPSHOT_PROP,
+            IVssAsync, IVssEnumObject, IVssExamineWriterMetadata, VSS_BT_FULL, VSS_CTX_BACKUP,
+            VSS_OBJECT_NONE, VSS_OBJECT_PROP, VSS_OBJECT_SNAPSHOT, VSS_OBJECT_SNAPSHOT_SET,
+            VSS_SNAPSHOT_CONTEXT, VSS_SNAPSHOT_PROP,
         },
         System::Com::{
             CoInitialize, CoInitializeSecurity, CoUninitialize, EOAC_NONE,
@@ -16,6 +18,7 @@ use windows::{
 };
 
 use crate::{
+    utils::get_unique_volume_name_for_path,
     vssbackupcomponent::{CreateVssBackupComponents, IVssBackupComponent},
     vssprop::VSSProp,
 };
@@ -137,6 +140,43 @@ impl VssClient {
         Ok(())
     }
 
+    /// Gather writers metadata
+    pub fn gather_writer_metadata(&self) -> ::windows::core::Result<()> {
+        tracing::info!("(Gathering writer metadata...)");
+        let mut p_async =
+            unsafe { IVssAsync::from_abi(::windows::core::zeroed::<IVssAsync>()).unwrap() };
+        unsafe {
+            // Gathers writer metadata
+            // WARNING: this call can be performed only once per IVssBackupComponents instance!
+            self.vss_object
+                .clone()
+                .as_ref()
+                .unwrap()
+                .GatherWriterMetadata(&mut p_async)?
+        };
+        self.wait_and_check_for_async_operation(&mut p_async)?;
+        tracing::info!("Initialize writer metadata ...");
+        // Initialize the internal metadata data structures
+        Ok(())
+    }
+
+    /// Initialize writer metadata
+    pub fn initialize_writer_metadata(&self) -> ::windows::core::Result<()> {
+        let mut cnt_writer = 0;
+        unsafe {
+            self.vss_object
+                .clone()
+                .as_ref()
+                .unwrap()
+                .GetWriterMetadataCount(&mut cnt_writer)?
+        };
+
+        for i in 0..cnt_writer {
+            // IVssExamineWriterMetadata
+        }
+        // Enumerate writers
+        Ok(())
+    }
     /// Waits for the completion of the asynchronous operation
     pub fn wait_and_check_for_async_operation(
         &self,
@@ -205,6 +245,127 @@ impl VssClient {
         }
 
         Ok(result)
+    }
+
+    pub fn get_snapshot_properties(&self, snapshot_id: GUID) -> ::windows::core::Result<VSSProp> {
+        let mut prop = VSS_SNAPSHOT_PROP::default();
+
+        let res = unsafe {
+            self.vss_object
+                .as_ref()
+                .unwrap()
+                .GetSnapshotProperties(snapshot_id, &mut prop)
+        };
+
+        match res {
+            Err(e) => return Err(e),
+            Ok(_) => {
+                return Ok(VSSProp::from_props(&prop));
+            }
+        }
+    }
+
+    /// Delete the given shadow copy
+    pub fn delete_snapshot(&self, vss_id: GUID) -> ::windows::core::Result<()> {
+        tracing::debug!("-Deleting shadow copy {:?}", vss_id);
+        let mut l_snapshot = 0;
+        let mut id_non_deleted_snapshot_id = GUID::default();
+        let hr_result = unsafe {
+            self.vss_object.as_ref().unwrap().DeleteSnapshots(
+                vss_id,
+                VSS_OBJECT_SNAPSHOT,
+                FALSE,
+                &mut l_snapshot,
+                &mut id_non_deleted_snapshot_id,
+            )
+        };
+
+        if hr_result.is_err() {
+            tracing::debug!("Error while deleting shadow copies...");
+            tracing::debug!(
+                "-Last shadow copy that could not be deleted:{:?}",
+                id_non_deleted_snapshot_id
+            );
+            return hr_result;
+        }
+        Ok(())
+    }
+
+    /// Delete all the shadow copies in the system
+    pub fn delete_all_snapshots(&self) -> ::windows::core::Result<()> {
+        let all_snapshosts = self.query_snapshot_set(GUID::default())?;
+
+        if all_snapshosts.len() == 0 {
+            tracing::debug!("There are no shadow copies on the system");
+            return Ok(());
+        }
+
+        for i in all_snapshosts {
+            match self.delete_snapshot(i.snapshot_id) {
+                Ok(_) => continue,
+                Err(e) => {
+                    tracing::error!("Error while deleting shadow copies...");
+                    tracing::error!(
+                        "- Last shadow copy that could not be deleted: {:?}",
+                        i.snapshot_id
+                    );
+                    return Err(e);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Delete the given shadow copy set
+    pub fn delete_snapshotset(&self, set_id: GUID) -> ::windows::core::Result<()> {
+        tracing::debug!("- Deleting shadow copy set {:?}", set_id);
+        let mut l_snapshot = 0;
+        let mut id_non_deleted_snapshot_id = GUID::default();
+        let hr_result = unsafe {
+            self.vss_object.as_ref().unwrap().DeleteSnapshots(
+                set_id,
+                VSS_OBJECT_SNAPSHOT_SET,
+                FALSE,
+                &mut l_snapshot,
+                &mut id_non_deleted_snapshot_id,
+            )
+        };
+
+        if hr_result.is_err() {
+            tracing::error!("Error while deleting shadow copies...");
+            tracing::error!(
+                "-Last shadow copy that could not be deleted:{:?}",
+                id_non_deleted_snapshot_id
+            );
+            return hr_result;
+        }
+        Ok(())
+    }
+
+    pub fn delete_oldest_snapshot(&self, vol_name: &str) -> ::windows::core::Result<()> {
+        let unique_volume = get_unique_volume_name_for_path(vol_name)?;
+
+        let all_snapshosts = self.query_snapshot_set(GUID::default())?;
+
+        if all_snapshosts.len() == 0 {
+            tracing::debug!("There are no shadow copies on the system");
+            return Ok(());
+        }
+        let mut oldest_id = GUID::default();
+        let mut oldest_time: DateTime<chrono::Utc> = DateTime::<Local>::MIN_UTC;
+        for i in all_snapshosts {
+            if i.origin_vol_name == unique_volume && i.create_time < oldest_time {
+                oldest_id = i.snapshot_id;
+                oldest_time = i.create_time;
+            }
+        }
+
+        if oldest_id != GUID::default() {
+            self.delete_snapshot(oldest_id)
+        } else {
+            tracing::debug!("There are no specified shadow copies on the system");
+            Ok(())
+        }
     }
 }
 
